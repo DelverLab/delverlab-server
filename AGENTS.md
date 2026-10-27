@@ -32,34 +32,38 @@ Base package: `com.delverlab.server`
 
 ## 2. Local development
 
-Spring Boot runs on the host. Its dependencies run in Docker through `compose.dev.yaml`.
+Spring Boot runs on the host. Its dependencies run in containers through `compose.dev.yaml`.
+
+Prerequisites:
+- [mise](https://mise.jdx.dev): run `mise install` in the project root to get the pinned JDK (`mise.toml`).
+- Docker or Podman with compose. With Podman, use `podman compose` in place of `docker compose`.
 
 | Service | Purpose | Address |
 |---|---|---|
-| `postgres` | Main database | `localhost:5432`, database `delverlab` |
-| `garage` | S3-compatible object storage | S3 API `http://localhost:3900`, admin API `http://localhost:3903` |
+| `postgres` | Main database (data in the `postgres-data` volume) | `localhost:5432`, database `delverlab` |
 
-Dev credentials (database user, S3 key, bucket) are in `application-dev.yaml` and match the compose file. They are for local use only.
+Dev credentials are in `application-dev.yaml` and match the compose file. They are for local use only. Other environments set the datasource through `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD`.
 
 ```bash
+# install the pinned JDK
+mise install
+
 # start / stop dependencies
 docker compose -f compose.dev.yaml up -d
 docker compose -f compose.dev.yaml down
 
-# wipe all local data (database + objects)
+# wipe all local data
 docker compose -f compose.dev.yaml down -v
 
 # run the server with the dev profile
 ./gradlew bootRun --args='--spring.profiles.active=dev'
 
-# test / full build
+# test / full build (Postgres must be running)
 ./gradlew test
 ./gradlew build
 ```
 
 On Windows PowerShell, use `.\gradlew.bat` in place of `./gradlew`.
-
-Docker-related config files (Garage config, init scripts) live in `docker/`.
 
 ---
 
