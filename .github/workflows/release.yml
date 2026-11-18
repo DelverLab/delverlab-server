@@ -1,0 +1,172 @@
+name: Publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump (ignored when resuming; first release is 0.1.0)
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      resume:
+        description: Exact existing stable tag to resume (e.g. v0.1.0); blank for a new release
+        type: string
+        required: false
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: delverlab-server-release
+  cancel-in-progress: false
+
+env:
+  BUMP: ${{ inputs.bump }}
+  RESUME_TAG: ${{ inputs.resume }}
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      revision: ${{ steps.plan.outputs.revision }}
+      timestamp: ${{ steps.plan.outputs.timestamp }}
+      tags: ${{ steps.plan.outputs.tags }}
+      image_id: ${{ steps.save.outputs.image_id }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Require the release workflow on main
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ||
+                "$GITHUB_WORKFLOW_REF" != "$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/heads/main" ||
+                "$GITHUB_WORKFLOW_SHA" != "$GITHUB_SHA" ]]; then
+            echo 'Dispatch Publish release from main.' >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify helper tests and prepare candidate
+        id: plan
+        shell: bash
+        env:
+          READ_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B -m unittest discover -s .github/scripts -p '*_test.py'
+          cp .github/scripts/release.py "$RUNNER_TEMP/delverlab-release.py"
+          python3 -B "$RUNNER_TEMP/delverlab-release.py" prepare
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        if: steps.plan.outputs.build == 'true'
+        with:
+          distribution: temurin
+          java-version: '27'
+
+      - name: Build, test and smoke-test the candidate
+        if: steps.plan.outputs.build == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          IMAGE_REF="ghcr.io/delverlab/delverlab-server:$VERSION"
+          bash .github/scripts/build-image.sh "$IMAGE_REF" "$VERSION"
+
+      - name: Save the tested image
+        if: steps.plan.outputs.build == 'true'
+        id: save
+        shell: bash
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          REVISION: ${{ steps.plan.outputs.revision }}
+        run: python3 -B "$RUNNER_TEMP/delverlab-release.py" save
+
+      - name: Transfer the tested image to the publish runner
+        if: steps.plan.outputs.build == 'true'
+        id: upload
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-candidate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: candidate
+    if: github.ref == 'refs/heads/main' && github.workflow_ref == format('{0}/.github/workflows/release.yml@refs/heads/main', github.repository) && github.workflow_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    # Configure Selected branches and tags: branch main only. Store the App key here.
+    environment: release
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.candidate.outputs.version }}
+      REVISION: ${{ needs.candidate.outputs.revision }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the tested image
+        if: needs.candidate.outputs.artifact_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/release-candidate
+          digest-mismatch: error
+
+      - name: Create a server-scoped App token
+        id: server-app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: DelverLab
+          repositories: delverlab-server
+          permission-contents: write
+
+      - name: Publish commit, tag, tested image and GitHub Release
+        id: release
+        shell: bash
+        env:
+          SERVER_APP_TOKEN: ${{ steps.server-app.outputs.token }}
+          REGISTRY_TOKEN: ${{ secrets.RELEASE_REGISTRY_TOKEN }}
+          REGISTRY_USERNAME: ${{ vars.RELEASE_REGISTRY_USERNAME }}
+          CANDIDATE_TIMESTAMP: ${{ needs.candidate.outputs.timestamp }}
+          CANDIDATE_TAGS: ${{ needs.candidate.outputs.tags }}
+          TESTED_IMAGE_ID: ${{ needs.candidate.outputs.image_id }}
+        run: python3 -B .github/scripts/release.py publish
+
+      - name: Create a deploy-scoped App token
+        id: deploy-app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: DelverLab
+          repositories: delverlab
+          permission-contents: write
+
+      - name: Verify image is public and pin deploy Compose
+        shell: bash
+        env:
+          SERVER_APP_TOKEN: ${{ steps.server-app.outputs.token }}
+          DEPLOY_APP_TOKEN: ${{ steps.deploy-app.outputs.token }}
+          PUBLISHED_DIGEST: ${{ steps.release.outputs.digest }}
+          PUBLISHED_MAIN: ${{ steps.release.outputs.main }}
+          PUBLISHED_TAGS: ${{ steps.release.outputs.tags }}
+        run: python3 -B .github/scripts/release.py deploy

@@ -32,7 +32,7 @@ Base package: `com.delverlab.server`
 
 ## 2. Local development
 
-Spring Boot runs on the host. Its dependencies run in containers through `compose.dev.yaml`.
+Spring Boot runs on the host. Run PostgreSQL using `compose.dev.yaml` in the sibling [delverlab](https://github.com/DelverLab/delverlab) checkout.
 
 Prerequisites:
 - [mise](https://mise.jdx.dev): run `mise install` in the project root to get the pinned JDK (`mise.toml`).
@@ -48,12 +48,9 @@ Dev credentials are in `application-dev.yaml` and match the compose file. They a
 # install the pinned JDK
 mise install
 
-# start / stop dependencies
-docker compose -f compose.dev.yaml up -d
-docker compose -f compose.dev.yaml down
-
-# wipe all local data
-docker compose -f compose.dev.yaml down -v
+# start / stop dependencies (from the server checkout)
+docker compose -f ../delverlab/compose.dev.yaml up -d --wait
+docker compose -f ../delverlab/compose.dev.yaml down
 
 # run the server with the dev profile
 ./gradlew bootRun --args='--spring.profiles.active=dev'
@@ -257,7 +254,7 @@ These must never be broken. Database triggers are a safety net. Services check f
 - Constructor injection with `private final` fields and `@RequiredArgsConstructor`. No `@Autowired` on fields.
 - Configuration through `@ConfigurationProperties` records under the `delverlab.*` prefix. Avoid scattered `@Value`.
 - Log with SLF4J through Lombok's `@Slf4j`. No `System.out`.
-- Never commit secrets. Only dev-only credentials may be in the repo, in `application-dev.yaml` and `compose.dev.yaml`.
+- Never commit secrets. `application-dev.yaml` and the CI Compose file use development-only credentials.
 
 ### Lombok
 
@@ -277,7 +274,8 @@ Lombok removes boilerplate. It does not replace records.
 
 ## 11. Git workflow
 
-- `main` is always buildable. **Never commit directly to `main`.**
+- `main` is always buildable. Do not commit directly to `main` except for the authenticated release workflow's changelog commit.
+- Include user-facing changes in the `Unreleased` section of `CHANGELOG.md` in the same PR. Internal-only changes can omit an entry.
 - Every feature or fix gets its own branch from an up-to-date `main`:
 
   | Prefix | Use |
@@ -289,7 +287,7 @@ Lombok removes boilerplate. It does not replace records.
 
 - Merge into `main` when the work is complete and `./gradlew build` passes. Delete the branch after merging.
 - Commit messages: imperative subject of 72 characters or less (`Add schema version publishing`). Use the body to explain *why*.
-- Commits use the developer's own git identity. Agents never add themselves as author or co-author, and never mention themselves in commit messages.
+- Commits use the developer's own git identity. Release automation uses its GitHub App bot identity. Agents never add themselves as author or co-author, and never mention themselves in commit messages.
 
 ---
 
