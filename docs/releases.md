@@ -3,7 +3,7 @@
 Add user-facing changes to `CHANGELOG.md` under `Unreleased` in the same pull request. CI checks the build and smoke-tests the container against PostgreSQL. Merging a pull request does not publish an image.
 
 1. In **Actions → Publish release → Run workflow**, select `main` and choose `patch`, `minor`, or `major`. Leave `resume` blank. The first release is `0.1.0` regardless of bump choice.
-2. The workflow closes `Unreleased`, tests the candidate, creates the release commit and tag, and records the tested image ID in a draft GitHub Release before pushing the image to GHCR. It verifies the image, publishes the release notes, and pins the published digest in `DelverLab/delverlab`. No workflow deploys to an installation automatically.
+2. The workflow closes `Unreleased`, tests the candidate, creates the release commit and tag, and records the tested image ID in a draft GitHub Release before pushing the image to GHCR. It verifies the image by digest, publishes the release notes, and updates `DelverLab/delverlab` with the version tag only (for example, `ghcr.io/delverlab/delverlab-server:0.1.0`). Published tags must not be overwritten. No workflow deploys to an installation automatically.
 3. If the first image is private, a package admin must make it public in GitHub Package settings. The workflow refuses to update the install repository until it verifies a public pull.
 
 If the run fails **before** the tag exists, fix the cause and start a new run from current `main`. If the tag already exists, dispatch from current `main` with `resume` set to the existing tag (for example `v0.1.0`). Resume continues that release without moving the tag, creating a new version, or replacing a published image.

@@ -67,27 +67,31 @@ class ChangelogTests(unittest.TestCase):
 
 
 class ComposeTests(unittest.TestCase):
-    def test_bootstrap_pins_only_server_image_and_is_idempotent(self):
+    def test_bootstrap_keeps_same_version_and_is_idempotent(self):
         updated = release.update_compose(COMPOSE, "0.1.0", DIGEST)
-        self.assertEqual(updated, COMPOSE.replace(f"{IMAGE}:0.1.0", f"{IMAGE}:0.1.0@{DIGEST}"))
+        self.assertEqual(updated, COMPOSE)
         self.assertEqual(release.update_compose(updated, "0.1.0", DIGEST), updated)
 
     def test_preserves_other_services_and_line_endings(self):
         pinned = COMPOSE.replace("0.1.0", f"1.9.0@{DIGEST}")
         content = (pinned + f"  mirror:\n    image: {IMAGE}:0.1.0\n").replace("\n", "\r\n")
         updated = release.update_compose(content, "1.10.0", OTHER_DIGEST)
-        self.assertEqual(updated, content.replace(f"1.9.0@{DIGEST}", f"1.10.0@{OTHER_DIGEST}"))
+        self.assertEqual(updated, content.replace(f"1.9.0@{DIGEST}", "1.10.0"))
+
+    def test_reads_tag_only_versions_after_bootstrap(self):
+        current = COMPOSE.replace("0.1.0", "0.2.0")
+        self.assertEqual(release.update_compose(current, "0.3.0", DIGEST), current.replace("0.2.0", "0.3.0"))
 
     def test_refuses_newer_version_or_mismatched_same_version(self):
-        pinned = release.update_compose(COMPOSE, "0.1.0", DIGEST)
+        pinned = COMPOSE.replace("0.1.0", f"0.1.0@{DIGEST}")
         for version in ("0.0.9", "0.1.0"):
             with self.subTest(version=version), self.assertRaises(release.ReleaseError):
                 release.update_compose(pinned, version, OTHER_DIGEST)
 
-    def test_refuses_unrecognized_layout_or_non_bootstrap_unpinned_image(self):
+    def test_refuses_unrecognized_layout_or_non_versioned_image(self):
         for invalid in (
             COMPOSE.replace("  server:", "  another:"),
-            COMPOSE.replace("0.1.0", "0.2.0"),
+            COMPOSE.replace("0.1.0", "latest"),
             COMPOSE + f"    image: {IMAGE}:0.1.0\n",
             COMPOSE + "  server:\n    image: something-else\n",
             COMPOSE.replace(f"image: {IMAGE}:0.1.0", "image: ${SERVER_IMAGE}"),
@@ -97,6 +101,20 @@ class ComposeTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
+    def test_release_notes_display_tag_only_but_record_manifest_digest(self):
+        body = release.release_body(NOTES, "0.1.0", SHA, DIGEST, OTHER_DIGEST)
+        self.assertIn(f"Image: `{IMAGE}:0.1.0`", body)
+        self.assertNotIn(f"{IMAGE}:0.1.0@", body)
+        self.assertIn(DIGEST, body)
+
+    def test_release_verification_accepts_legacy_notes_but_not_a_changed_digest(self):
+        for legacy in (False, True):
+            record = {"tag_name": "v0.1.0", "draft": False, "prerelease": False,
+                      "body": release.release_body(NOTES, "0.1.0", SHA, DIGEST, OTHER_DIGEST, legacy=legacy)}
+            release.check_image_release(record, NOTES, "0.1.0", SHA, DIGEST, OTHER_DIGEST)
+            with self.assertRaises(release.ReleaseError):
+                release.check_image_release(record, NOTES, "0.1.0", SHA, OTHER_DIGEST, OTHER_DIGEST)
+
     def test_validates_provenance_and_platform(self):
         labels = {"org.opencontainers.image.revision": SHA,
                   "org.opencontainers.image.version": "0.1.0",
@@ -387,13 +405,13 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(self.pushes, [])
 
     def test_race_reloads_tip_and_stops_if_already_pinned(self):
-        self.run_deploy(COMPOSE, release.update_compose(COMPOSE, "0.1.0", DIGEST))
+        self.run_deploy(COMPOSE.replace("0.1.0", f"0.1.0@{DIGEST}"), COMPOSE)
         self.assertEqual(self.checkouts, 2)
         self.assertEqual(self.pushes, [("git", "push", f"https://github.com/{release.DEPLOY}.git", "HEAD:refs/heads/main")])
 
     def test_race_reloads_tip_and_refuses_newer_pin(self):
         with self.assertRaisesRegex(release.ReleaseError, "newer version"):
-            self.run_deploy(COMPOSE, release.update_compose(COMPOSE, "0.2.0", OTHER_DIGEST))
+            self.run_deploy(COMPOSE.replace("0.1.0", f"0.1.0@{DIGEST}"), COMPOSE.replace("0.1.0", "0.2.0"))
         self.assertEqual(self.checkouts, 2)
         self.assertEqual(len(self.pushes), 1)
 
