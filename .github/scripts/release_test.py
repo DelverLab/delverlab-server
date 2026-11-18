@@ -23,6 +23,14 @@ COMPOSE = f"services:\n  db:\n    image: postgres:18\n  server:\n    image: {IMA
 
 
 class VersionTests(unittest.TestCase):
+    def test_retains_only_the_original_detached_first_release_for_provenance(self):
+        old = "d814081da61dc54298fb0ed10aa3e9186a31dd3a"
+        self.assertEqual(release.release_revisions({}, {"refs/tags/v0.1.0": old, "refs/tags/v9.0.0": SHA}),
+                         {"v0.1.0": old})
+        self.assertEqual(release.release_revisions({}, {"refs/tags/v0.1.0": SHA}), {})
+        self.assertEqual(release.release_revisions({"v0.2.0": SHA}, {"refs/tags/v0.1.0": old}),
+                         {"v0.1.0": old, "v0.2.0": SHA})
+
     def test_first_release_never_depends_on_bump(self):
         for bump in ("patch", "minor", "major"):
             self.assertEqual(release.choose_version(bump, {}, set(), SHA), ("0.1.0", None))
