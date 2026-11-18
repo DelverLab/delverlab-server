@@ -3,4 +3,4 @@
 ## [Unreleased]
 
 ### Added
-- Added a server container and a readiness endpoint for self-hosted installations.
+- Added a server container and separate liveness and database-aware readiness probes for self-hosted installations.

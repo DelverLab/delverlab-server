@@ -8,5 +8,5 @@ COPY --chown=10001:10001 --chmod=0444 build/libs/server.jar /app/server.jar
 USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=5s --timeout=4s --start-period=30s --retries=12 \
-  CMD ["curl", "--fail", "--silent", "--max-time", "3", "http://127.0.0.1:8080/healthz"]
+  CMD ["curl", "--fail", "--silent", "--max-time", "3", "http://127.0.0.1:8080/actuator/health/readiness"]
 ENTRYPOINT ["java", "-jar", "/app/server.jar"]
