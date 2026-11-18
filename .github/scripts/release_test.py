@@ -295,6 +295,25 @@ class PublishFlowTests(unittest.TestCase):
 
 
 class ReleaseApiTests(unittest.TestCase):
+    def test_placeholder_draft_must_match_title_revision_and_evidence(self):
+        draft = {"id": 42, "tag_name": "untagged-165028226fdddf40e04c", "name": "v0.1.0",
+                 "target_commitish": SHA, "draft": True, "prerelease": False,
+                 "body": release.evidence(SHA, DIGEST)}
+        self.assertEqual(release.recorded_image(draft, "v0.1.0", SHA), DIGEST)
+        for invalid in (draft | {"name": "v0.2.0"}, draft | {"target_commitish": PARENT},
+                        draft | {"draft": False}):
+            with self.assertRaises(release.ReleaseError):
+                release.recorded_image(invalid, "v0.1.0", SHA)
+        with patch.object(release, "http", return_value=(200, {}, json.dumps(draft).encode())):
+            self.assertEqual(release.Releases("test").get(42, "v0.1.0"), draft)
+
+    def test_finalize_explicitly_sets_existing_tag(self):
+        client = release.Releases("test")
+        published = {"tag_name": "v0.1.0", "draft": False, "prerelease": False, "body": NOTES}
+        with patch.object(client, "edit", return_value=published) as edit:
+            client.finalize({"id": 42, "draft": True}, "v0.1.0", NOTES, True)
+        self.assertEqual(edit.call_args.kwargs["tag_name"], "v0.1.0")
+
     def test_create_draft_uses_the_creation_response_without_listing(self):
         record = {"id": 42, "tag_name": "v0.1.0", "draft": True,
                   "prerelease": False, "body": release.evidence(SHA, DIGEST)}
