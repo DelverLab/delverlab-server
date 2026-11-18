@@ -17,6 +17,11 @@ on:
         type: string
         required: false
         default: ''
+      resume_release_id:
+        description: Optional numeric GitHub Release ID when a draft is not listed
+        type: string
+        required: false
+        default: ''
 
 permissions: {}
 
@@ -146,6 +151,7 @@ jobs:
           SERVER_APP_TOKEN: ${{ steps.server-app.outputs.token }}
           REGISTRY_TOKEN: ${{ secrets.RELEASE_REGISTRY_TOKEN }}
           REGISTRY_USERNAME: ${{ vars.RELEASE_REGISTRY_USERNAME }}
+          RESUME_RELEASE_ID: ${{ inputs.resume_release_id }}
           CANDIDATE_TIMESTAMP: ${{ needs.candidate.outputs.timestamp }}
           CANDIDATE_TAGS: ${{ needs.candidate.outputs.tags }}
           TESTED_IMAGE_ID: ${{ needs.candidate.outputs.image_id }}
