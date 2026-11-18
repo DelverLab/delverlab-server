@@ -188,9 +188,18 @@ def evidence(revision, image_id):
     return f"<!-- delverlab-tested-image {revision} {image_id} -->"
 
 
+def release_matches_tag(record, tag):
+    return record.get("tag_name") == tag or (
+        record.get("draft") is True and record.get("name") == tag
+        and valid(r"untagged-[a-f0-9]+", record.get("tag_name"))
+    )
+
+
 def recorded_image(record, tag, revision):
-    if not record or record.get("tag_name") != tag or record.get("prerelease") is not False:
+    if not record or not release_matches_tag(record, tag) or record.get("prerelease") is not False:
         raise ReleaseError("Missing tested image record for this release")
+    if record.get("tag_name") != tag and record.get("target_commitish") != revision:
+        raise ReleaseError("Draft release does not target the expected commit")
     text = record.get("body") or ""
     matches = re.findall(rf"^<!-- delverlab-tested-image ({SHA}) ({DIGEST}) -->$", text, re.MULTILINE)
     if len(matches) != 1 or matches[0][0] != revision:
@@ -409,7 +418,7 @@ class Releases:
             if status != 200:
                 raise ReleaseError(f"Could not list GitHub Releases (HTTP {status})")
             for record in json.loads(raw):
-                if record.get("tag_name") == tag:
+                if release_matches_tag(record, tag):
                     if match:
                         raise ReleaseError(f"Multiple GitHub Releases for {tag}")
                     match = record
@@ -433,7 +442,7 @@ class Releases:
         if status != 200:
             raise ReleaseError(f"Could not read GitHub Release by ID (HTTP {status})")
         record = json.loads(raw)
-        if record.get("tag_name") != tag:
+        if not release_matches_tag(record, tag):
             raise ReleaseError("GitHub Release ID does not match the requested tag")
         return record
 
@@ -447,7 +456,7 @@ class Releases:
         return json.loads(raw)
 
     def finalize(self, record, tag, body, latest):
-        updated = self.edit(record, body=body, draft=False, make_latest="true" if latest else "false")
+        updated = self.edit(record, tag_name=tag, body=body, draft=False, make_latest="true" if latest else "false")
         check_release(updated, tag, body)
 
 
