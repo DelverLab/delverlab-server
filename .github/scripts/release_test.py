@@ -220,7 +220,7 @@ class PublishFlowTests(unittest.TestCase):
     def publish(self, plan, registry, releases, **mocks):
         with patch.dict(os.environ, {
             "SERVER_APP_TOKEN": "test", "REGISTRY_TOKEN": "test", "RUNNER_TEMP": "/unused",
-            "REGISTRY_USERNAME": "test-publisher",
+            "REGISTRY_USERNAME": "test-publisher", "RESUME_RELEASE_ID": "",
             "CANDIDATE_TIMESTAMP": "2026-11-18T00:00:00Z", "VERSION": plan.version,
             "REVISION": plan.revision, "CANDIDATE_TAGS": release.tag_snapshot(plan.tags),
             "TESTED_IMAGE_ID": OTHER_DIGEST,
@@ -281,9 +281,9 @@ class PublishFlowTests(unittest.TestCase):
     def test_resume_finalizes_a_verified_draft_even_if_anonymous_probe_rebuilt(self):
         tag = "v0.1.0"
         plan = release.Plan(SHA, PARENT, "0.1.0", True, {}, {tag: PARENT}, None, NOTES)
-        draft = {"tag_name": tag, "draft": True, "prerelease": False,
+        draft = {"id": 42, "tag_name": tag, "draft": True, "prerelease": False,
                  "body": release.evidence(PARENT, DIGEST)}
-        releases = Mock(find=Mock(return_value=draft))
+        releases = Mock(find=Mock(return_value=draft), get=Mock(return_value=draft))
         output = Mock()
         cmd = Mock()
         self.publish(plan, Mock(lookup=Mock(return_value=(OTHER_DIGEST, DIGEST))), releases,
@@ -292,6 +292,21 @@ class PublishFlowTests(unittest.TestCase):
             draft, tag, release.release_body(NOTES, "0.1.0", PARENT, OTHER_DIGEST, DIGEST), True)
         cmd.assert_called_once()
         output.assert_called_once_with(digest=OTHER_DIGEST, main=SHA, tags=release.tag_snapshot({}))
+
+
+class ReleaseApiTests(unittest.TestCase):
+    def test_create_draft_uses_the_creation_response_without_listing(self):
+        record = {"id": 42, "tag_name": "v0.1.0", "draft": True,
+                  "prerelease": False, "body": release.evidence(SHA, DIGEST)}
+        with patch.object(release, "http", return_value=(201, {}, json.dumps(record).encode())) as http:
+            self.assertEqual(release.Releases("test").create_draft("v0.1.0", SHA, DIGEST), record)
+        http.assert_called_once()
+
+    def test_read_release_by_id_rejects_mismatched_tag(self):
+        body = json.dumps({"id": 42, "tag_name": "v0.2.0", "draft": True}).encode()
+        with patch.object(release, "http", return_value=(200, {}, body)), self.assertRaisesRegex(
+                release.ReleaseError, "does not match"):
+            release.Releases("test").get(42, "v0.1.0")
 
 
 class DeployTests(unittest.TestCase):
