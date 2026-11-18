@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.delverlab"
-version = "0.0.1-SNAPSHOT"
+version = providers.gradleProperty("releaseVersion").getOrElse("0.0.1-SNAPSHOT")
 
 java {
 	toolchain {
@@ -44,4 +44,8 @@ dependencies {
 
 tasks.withType<Test> {
 	useJUnitPlatform()
+}
+
+tasks.bootJar {
+	archiveFileName.set("server.jar")
 }
