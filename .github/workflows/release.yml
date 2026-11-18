@@ -167,7 +167,7 @@ jobs:
           repositories: delverlab
           permission-contents: write
 
-      - name: Verify image is public and pin deploy Compose
+      - name: Verify public image and update deploy Compose
         shell: bash
         env:
           SERVER_APP_TOKEN: ${{ steps.server-app.outputs.token }}

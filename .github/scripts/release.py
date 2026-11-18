@@ -27,6 +27,8 @@ SHA = r"[a-f0-9]{40}"
 DIGEST = r"sha256:[a-f0-9]{64}"
 BOOTSTRAP = "0.1.0"
 CHANGELOG = Path("CHANGELOG.md")
+BOT_NAME = "delverlab-release[bot]"
+BOT_EMAIL = f"358323233+{BOT_NAME}@users.noreply.github.com"
 
 
 class ReleaseError(Exception):
@@ -127,7 +129,7 @@ def compose_image(text):
         raise ReleaseError("Expected one server image line in compose.yaml")
     entry = entries[0]
     match = re.fullmatch(rf"    image: {re.escape(IMAGE)}:({VERSION})(?:@({DIGEST}))?", entry.group())
-    if not match or (match[2] is None and match[1] != BOOTSTRAP):
+    if not match:
         raise ReleaseError("Unexpected server image reference in compose.yaml")
     start = services[0].end() + servers[0].end() + entry.start()
     return match[1], match[2], start, start + len(entry.group())
@@ -141,7 +143,7 @@ def update_compose(text, version, digest):
         raise ReleaseError("Invalid image digest")
     if old_version == version and old_digest and old_digest != digest:
         raise ReleaseError("Deploy pins a different digest for the same version")
-    return f"{text[:start]}    image: {IMAGE}:{version}@{digest}{text[end:]}"
+    return f"{text[:start]}    image: {IMAGE}:{version}{text[end:]}"
 
 
 def check_image(os_name, arch, labels, version, revision):
@@ -177,9 +179,19 @@ def check_remote(refs, expected_main, expected_tags):
         raise ReleaseError("Stable tags changed; dispatch again from the current main")
 
 
-def release_body(notes, version, revision, digest, image_id):
-    provenance = f"Image: `{IMAGE}:{version}@{digest}`\nSource commit: `{revision}`"
+def release_body(notes, version, revision, digest, image_id, *, legacy=False):
+    image = f"{IMAGE}:{version}"
+    image_line = f"Image: `{image}@{digest}`" if legacy else f"Image: `{image}`"
+    provenance = f"{image_line}\nSource commit: `{revision}`"
+    if not legacy:
+        provenance += f"\n\n<!-- delverlab-manifest {digest} -->"
     return f"{notes}\n\n{provenance}\n\n{evidence(revision, image_id)}".lstrip("\n")
+
+
+def check_image_release(record, notes, version, revision, digest, image_id):
+    body = release_body(notes, version, revision, digest, image_id)
+    legacy_body = release_body(notes, version, revision, digest, image_id, legacy=True)
+    check_release(record, f"v{version}", legacy_body if record and record.get("body") == legacy_body else body)
 
 
 def evidence(revision, image_id):
@@ -312,12 +324,10 @@ def make_plan(read_token, timestamp):
     CHANGELOG.write_bytes(updated.encode("utf-8"))
     git("add", "--", str(CHANGELOG))
     tree = git("write-tree").strip()
-    identity = "DelverLab Release"
-    email = "release@users.noreply.github.com"
     revision = git("-c", "commit.gpgsign=false", "commit-tree", tree, "-p", base,
                    "-m", f"chore(release): v{version}", env=child_env(
-                       GIT_AUTHOR_NAME=identity, GIT_COMMITTER_NAME=identity,
-                       GIT_AUTHOR_EMAIL=email, GIT_COMMITTER_EMAIL=email,
+                       GIT_AUTHOR_NAME=BOT_NAME, GIT_COMMITTER_NAME=BOT_NAME,
+                       GIT_AUTHOR_EMAIL=BOT_EMAIL, GIT_COMMITTER_EMAIL=BOT_EMAIL,
                        GIT_AUTHOR_DATE=timestamp, GIT_COMMITTER_DATE=timestamp)).strip()
     return Plan(base, revision, version, False, local_tags, reachable, previous,
                 changelog_notes(updated, version))
@@ -545,13 +555,15 @@ def check_previous(plan, registry, releases, compose):
     revision = plan.reachable[tag]
     try:
         observed = registry.lookup(version, revision)
-        if not observed or update_compose(compose, version, observed[0]) != compose:
-            raise ReleaseError("Prior image is missing or not pinned in deploy")
+        current_version, current_digest, _, _ = compose_image(compose)
+        if not observed or current_version != version or (current_digest and current_digest != observed[0]):
+            raise ReleaseError("Prior image is missing or not configured in deploy")
         record = releases.find(tag)
         if recorded_image(record, tag, revision) != observed[1]:
             raise ReleaseError("Prior image does not match its tested image record")
-        check_release(record, tag, release_body(tagged_notes(tag, revision), version,
-                                                revision, observed[0], observed[1]))
+        check_image_release(record, tagged_notes(tag, revision), version, revision, *observed)
+        if Registry().lookup(version, revision) != observed:
+            raise ReleaseError("Prior image is not publicly available at the verified digest")
     except ReleaseError as error:
         raise ReleaseError(f"Previous release {tag} is incomplete; resume it before bumping: {error}") from error
 
@@ -598,7 +610,7 @@ def publish():
             image_id = recorded
             update_compose(compose, plan.version, existing[0])
             if record.get("draft") is not True:
-                check_release(record, tag, release_body(plan.notes, plan.version, plan.revision, existing[0], image_id))
+                check_image_release(record, plan.notes, plan.version, plan.revision, existing[0], image_id)
     else:
         check_previous(plan, registry, releases, compose)
         if existing or record is not None or not image_id:
@@ -657,9 +669,9 @@ def publish():
         guard()
         releases.finalize(current_record, tag, body, not plan.resume or tag == latest_tag(plan.reachable))
     else:
-        check_release(current_record, tag, body)
+        check_image_release(current_record, plan.notes, plan.version, plan.revision, digest, image_id)
     output(digest=digest, main=expected_main, tags=tag_snapshot(tags))
-    print(f"Verified {tag} at {plan.revision}: {ref}@{digest}")
+    print(f"Verified {tag} at {plan.revision}: {ref} (manifest {digest})")
 
 
 def compose_config(directory, *args):
@@ -674,7 +686,7 @@ def deploy():
     version_key(version)
     if not valid(DIGEST, digest):
         raise ReleaseError("Invalid published image digest")
-    pinned = f"{IMAGE}:{version}@{digest}"
+    image = f"{IMAGE}:{version}"
     server_token = os.environ["SERVER_APP_TOKEN"]
     deploy_token = os.environ["DEPLOY_APP_TOKEN"]
     directory = workspace() / "release-deploy"
@@ -696,7 +708,7 @@ def deploy():
     guard()
     check_public_tag()
     with TemporaryDirectory(dir=workspace()) as config:
-        result = command("docker", "pull", "--platform", "linux/amd64", pinned,
+        result = command("docker", "pull", "--platform", "linux/amd64", image,
                          env=docker_env(Path(config)), allow_failure=True)
     if result.returncode:
         raise ReleaseError("Anonymous GHCR pull failed; verify availability/visibility and resume this tag")
@@ -714,17 +726,17 @@ def deploy():
         if original != updated:
             (directory / "compose.yaml").write_bytes(updated.encode("utf-8"))
         compose_config(directory, "-q")
-        before["services"]["server"]["image"] = pinned
+        before["services"]["server"]["image"] = image
         if json.loads(compose_config(directory, "--format", "json")) != before:
             raise ReleaseError("Compose resolves to changes beyond the server image")
         check_public_tag()
         guard()
         if original == updated:
             if remote_refs(DEPLOY, None, MAIN).get(MAIN) == tip:
-                print(f"Deploy main already pins {pinned}")
+                print(f"Deploy main already uses {image}")
                 return
             continue
-        git("-c", "user.name=DelverLab Release", "-c", "user.email=release@users.noreply.github.com",
+        git("-c", f"user.name={BOT_NAME}", "-c", f"user.email={BOT_EMAIL}",
             "-c", "commit.gpgsign=false", "commit", "-m", f"Deploy server v{version}", "--", "compose.yaml",
             cwd=directory)
         guard()
@@ -732,7 +744,7 @@ def deploy():
                          cwd=directory, env=git_auth(DEPLOY, deploy_token), allow_failure=True)
         remote_tip = remote_refs(DEPLOY, None, MAIN).get(MAIN)
         if remote_tip == git("rev-parse", "HEAD", cwd=directory).strip():
-            print(f"Deploy main pins {pinned}")
+            print(f"Deploy main uses {image}")
             return
         if remote_tip is None or remote_tip == tip:
             raise ReleaseError(f"Deploy push did not land (exit {result.returncode}); check permissions and resume")
