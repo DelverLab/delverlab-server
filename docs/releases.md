@@ -8,6 +8,8 @@ Add user-facing changes to `CHANGELOG.md` under `Unreleased` in the same pull re
 
 If the run fails **before** the tag exists, fix the cause and start a new run from current `main`. If the tag already exists, dispatch from current `main` with `resume` set to the existing tag (for example `v0.1.0`). Resume continues that release without moving the tag, creating a new version, or replacing a published image.
 
+The original `v0.1.0` remains valid even though its tagged commit is no longer on `main`: the tag was kept at the original commit to preserve the published image's provenance after correcting commit attribution. New release tags must be reachable from `main`.
+
 ## Repository setup
 
 Use a GitHub App installed only on `delverlab-server` and `delverlab`, with **Contents: Read and write**. In the server's `release` environment, set `RELEASE_APP_CLIENT_ID` as a variable and `RELEASE_APP_PRIVATE_KEY` as a secret. Restrict the environment to the `main` branch. The App needs permission to bypass the server's pull-request/check rule for the tested release commit and to set release tags. Keep tag deletion/movement and branch force-push protections separate. Use only this workflow to write stable server image tags in GHCR.
