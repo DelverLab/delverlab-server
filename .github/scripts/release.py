@@ -418,13 +418,24 @@ class Releases:
             page += 1
 
     def create_draft(self, tag, revision, image_id):
-        status, _, _ = http(self.URL, self.headers, payload={
+        status, _, raw = http(self.URL, self.headers, payload={
             "tag_name": tag, "target_commitish": revision, "name": tag,
             "body": evidence(revision, image_id), "draft": True, "prerelease": False,
         })
         if status != 201:
             raise ReleaseError(f"GitHub Release draft creation failed (HTTP {status}); use resume")
-        return self.find(tag)
+        return json.loads(raw)
+
+    def get(self, release_id, tag):
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", str(release_id)):
+            raise ReleaseError("Expected a numeric GitHub Release ID")
+        status, _, raw = http(f"{self.URL}/{release_id}", self.headers)
+        if status != 200:
+            raise ReleaseError(f"Could not read GitHub Release by ID (HTTP {status})")
+        record = json.loads(raw)
+        if record.get("tag_name") != tag:
+            raise ReleaseError("GitHub Release ID does not match the requested tag")
+        return record
 
     def edit(self, record, **fields):
         release_id = record.get("id")
@@ -436,8 +447,8 @@ class Releases:
         return json.loads(raw)
 
     def finalize(self, record, tag, body, latest):
-        self.edit(record, body=body, draft=False, make_latest="true" if latest else "false")
-        check_release(self.find(tag), tag, body)
+        updated = self.edit(record, body=body, draft=False, make_latest="true" if latest else "false")
+        check_release(updated, tag, body)
 
 
 def saved_config_digest(path, version, revision):
@@ -562,7 +573,10 @@ def publish():
     if version_key(old_version) > version_key(plan.version):
         raise ReleaseError("Deploy already uses a newer version; refusing stale release")
     existing = registry.lookup(plan.version, plan.revision)
-    record = releases.find(tag)
+    resume_id = os.environ.get("RESUME_RELEASE_ID", "")
+    if resume_id and not plan.resume:
+        raise ReleaseError("A release ID can only be given when resuming a tag")
+    record = releases.get(resume_id, tag) if resume_id else releases.find(tag)
     if plan.resume:
         if not existing and ((record is not None and record.get("draft") is not True)
                              or (old_version == plan.version and old_digest)):
@@ -627,7 +641,7 @@ def publish():
     digest = publish_image(lookup, push, resume=plan.resume, image_id=image_id)
     body = release_body(plan.notes, plan.version, plan.revision, digest, image_id)
     guard()
-    current_record = releases.find(tag)
+    current_record = releases.get(record["id"], tag) if record and record.get("id") else None
     if current_record is None or recorded_image(current_record, tag, plan.revision) != image_id:
         raise ReleaseError("Tested image record changed during publication")
     if current_record.get("draft") is True:
