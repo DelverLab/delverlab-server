@@ -29,6 +29,9 @@ BOOTSTRAP = "0.1.0"
 CHANGELOG = Path("CHANGELOG.md")
 BOT_NAME = "delverlab-release[bot]"
 BOT_EMAIL = f"358323233+{BOT_NAME}@users.noreply.github.com"
+# The first published image uses this commit. Keep its tag usable after the
+# attribution cleanup removes the original commit from main's history.
+ORIGINAL_FIRST_RELEASE = "d814081da61dc54298fb0ed10aa3e9186a31dd3a"
 
 
 class ReleaseError(Exception):
@@ -48,6 +51,13 @@ def version_key(version):
 def latest_tag(reachable):
     stable = [tag for tag in reachable if valid("v" + VERSION, tag)]
     return max(stable, key=lambda tag: version_key(tag[1:]), default=None)
+
+
+def release_revisions(reachable, tag_refs):
+    tag = f"v{BOOTSTRAP}"
+    if tag not in reachable and tag_refs.get(f"refs/tags/{tag}") == ORIGINAL_FIRST_RELEASE:
+        return {**reachable, tag: ORIGINAL_FIRST_RELEASE}
+    return reachable
 
 
 def choose_version(bump, reachable, all_tags, base):
@@ -310,6 +320,7 @@ def make_plan(read_token, timestamp):
     reachable = {tag: git("rev-parse", f"refs/tags/{tag}^{{commit}}").strip()
                  for tag in git("tag", "--merged", base, "--list", "v*").splitlines()
                  if valid("v" + VERSION, tag)}
+    reachable = release_revisions(reachable, local_tags)
     resume_tag = os.environ["RESUME_TAG"]
     if resume_tag:
         version, revision = resume_version(resume_tag, reachable)
